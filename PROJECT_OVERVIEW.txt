@@ -1,0 +1,541 @@
+================================================================================
+  FinGuard AI — Real-Time Financial Fraud Detection & Prevention Platform
+================================================================================
+
+  Version      : 1.0.0
+  Last Updated : February 2026
+  Authors      : FinGuard AI Team
+  Stack        : FastAPI · IsolationForest · SQLite · Next.js 16 · Recharts
+
+  Documentation Note:
+  -------------------
+  This document reflects the codebase as of February 2026. If any detail
+  here drifts from implementation, source files in backend/ and frontend/
+  are the source of truth.
+
+================================================================================
+  1. PROJECT TITLE
+================================================================================
+
+  FinGuard AI – Real-Time Financial Fraud Detection & Prevention Platform
+
+================================================================================
+  2. PROJECT DESCRIPTION
+================================================================================
+
+  FinGuard AI is a full-stack, production-grade fraud intelligence system that
+  enables financial institutions and analysts to detect, monitor, and act on
+  fraudulent transactions in real time.
+
+  The Real-World Problem:
+  -----------------------
+  Financial fraud costs the global economy over $5 trillion annually. Traditional
+  rule-based systems are slow to adapt and generate excessive false positives.
+  Banks and fintech companies need intelligent systems that can analyse
+  transactions as they happen, score their risk level, and allow immediate
+  remedial action — all from a unified interface.
+
+  What FinGuard AI Does:
+  ----------------------
+  - Accepts transaction data (amount, time-of-day) via a web interface.
+  - Runs an ML anomaly-detection model to classify the transaction as FRAUD
+    or NORMAL and returns an anomaly risk score.
+  - Stores every result in a persistent database.
+  - Surfaces live analytics on a real-time dashboard (auto-refreshing every 5s).
+  - Allows analysts to instantly block flagged transactions with a single click.
+  - Presents all data in a polished, production-style fintech UI.
+
+================================================================================
+  3. CORE FEATURES
+================================================================================
+
+  1. Real-Time Fraud Detection
+     - User submits amount and hour-of-day via the Detect Fraud page.
+     - ML model returns FRAUD / NORMAL classification in milliseconds.
+
+  2. Anomaly Risk Scoring
+     - Each transaction receives a numeric risk score derived from the
+       IsolationForest anomaly score.
+     - A visual progress bar communicates severity at a glance.
+
+  3. Transaction History
+     - All past predictions are persisted in a SQLite database.
+     - Full history is viewable in a sortable, highlighted table.
+
+  4. Executive Analytics Dashboard
+     - 4 live KPI cards: Total Transactions, Fraud Count, Fraud Rate, Latest Risk.
+     - Bar chart (Fraud vs Normal count) and Donut pie chart (distribution).
+     - Recent 5 transactions with status and action controls.
+
+  5. Live System Monitoring
+     - Dashboard polls the API every 5 seconds using setInterval.
+     - New data appears without any page refresh.
+     - New FRAUD rows flash red on arrival; KPI numbers animate on change.
+
+  6. Block Transaction Action
+     - FRAUD rows that are still ACTIVE display a "Block" button.
+     - Clicking it calls PATCH /transactions/{id}/block.
+     - The row status updates to BLOCKED instantly; button disappears.
+
+  7. Production UI/UX
+     - Dark fintech theme with ambient glow backgrounds.
+     - Skeleton shimmer loaders during data fetches.
+     - Sticky table headers, FRAUD row left-border accents.
+     - Responsive layout for laptop, tablet, and mobile.
+     - Frosted-glass sticky navbar with active route indicator.
+
+================================================================================
+  4. HOW THE SYSTEM WORKS — END-TO-END FLOW
+================================================================================
+
+  Step 1 — User Input (Frontend)
+    The analyst opens the Detect Fraud page at http://localhost:3000/detect.
+    They enter a transaction amount (e.g. $9,000) and the hour of the day
+    (e.g. 2 for 2:00 AM).
+
+  Step 2 — API Request (Frontend → Backend)
+    The Next.js frontend calls predictFraud() from services/api.ts.
+    This sends an HTTP POST to http://localhost:8000/predict with:
+      { "amount": 9000, "time": 2 }
+
+  Step 3 — ML Inference (Backend → ML Model)
+    FastAPI receives the request, validates it with Pydantic, then calls
+    predict_fraud(amount, time) from the ML predict module.
+    The trained IsolationForest model scores the transaction.
+
+  Step 4 — Response Assembly (ML Model → Backend)
+    The function returns:
+      { "prediction": "FRAUD", "risk_score": 0.7821 }
+
+  Step 5 — Persistence (Backend → Database)
+    FastAPI calls save_transaction() which writes the result to the SQLite
+    database (finguard.db) via SQLAlchemy ORM.
+    Default status is "ACTIVE".
+
+  Step 6 — Response to Frontend
+    The API returns the prediction and risk score to the frontend.
+    The UI displays the result card with the appropriate colour and badge.
+
+  Step 7 — History Refresh
+    After each prediction, getTransactions() is called again.
+    The history table below the form updates to show the new row.
+
+  Step 8 — Dashboard Live Update (Polling)
+    The dashboard independently polls GET /transactions every 5 seconds.
+    When the new fraud row arrives, it flashes red and the KPI cards animate.
+
+  Step 9 — Block Action (Optional)
+    The analyst clicks "Block" on the FRAUD row.
+    Frontend calls PATCH /transactions/{id}/block.
+    The backend updates status to "BLOCKED" in the database.
+    The dashboard and detect table reflect the new status immediately.
+
+================================================================================
+  5. MACHINE LEARNING MODEL
+================================================================================
+
+  Algorithm: IsolationForest (scikit-learn)
+  Task Type: Unsupervised Anomaly Detection
+
+  Why IsolationForest?
+  --------------------
+  IsolationForest detects anomalies without needing labelled fraud data.
+  It works by randomly isolating observations — anomalies are isolated faster
+  because they are few and different from the majority. This makes it ideal
+  for fraud detection where fraudulent transactions are rare.
+
+    Synthetic Dataset Generation (ml/train.py):
+    --------------------------------------------
+    - 1,000 normal transactions:
+      amount sampled uniformly in [$1, $500]
+      time sampled uniformly in [8, 20] hrs (daytime)
+
+    - 50 fraudulent transactions:
+      amount sampled uniformly in [$5,000, $20,000]
+      time sampled uniformly in [0, 5] hrs (late-night)
+
+  Features:
+  ---------
+  - amount : Dollar value of the transaction.
+  - time   : Hour of day (0–23). Late-night hours are high-risk.
+
+  Data Scaling:
+  -------------
+  StandardScaler normalises both features to zero mean and unit variance
+  before training. The same scaler is applied to inputs at inference time.
+  Both model.pkl and scaler.pkl are saved with joblib.
+
+  Training:
+  ---------
+  IsolationForest(contamination=0.02, random_state=42)
+  The contamination parameter tells the model that ~2% of the training
+  data is expected to be anomalous.
+
+  Prediction (ml/predict.py):
+  ---------------------------
+  - Input features are scaled using the saved StandardScaler.
+  - model.predict() returns -1 (anomaly) or +1 (normal).
+  - model.score_samples() returns the raw anomaly score.
+  - risk_score = -1 × anomaly_score  (higher = more anomalous)
+  - Final output:
+      { "prediction": "FRAUD" | "NORMAL", "risk_score": float }
+
+================================================================================
+  6. BACKEND ARCHITECTURE
+================================================================================
+
+  Framework: FastAPI (Python 3.11+)
+  Server:    Uvicorn ASGI server
+
+  Project Structure:
+  ------------------
+  backend/
+  ├── app/
+  │   ├── main.py              ← FastAPI app, all endpoints, lifespan startup
+  │   ├── db/
+  │   │   └── session.py       ← SQLAlchemy engine, SessionLocal, get_db()
+  │   ├── models/
+  │   │   └── transaction.py   ← ORM model for the transactions table
+  │   ├── schemas/
+  │   │   └── transaction.py   ← Pydantic response schema (TransactionResponse)
+  │   └── services/
+  │       └── transaction.py   ← save_transaction(), get_all_transactions(),
+  │                               block_transaction()
+  └── ml/
+      ├── train.py             ← Dataset generation, model training, artifact saving
+      ├── predict.py           ← Load artifacts, predict_fraud() function
+      ├── model.pkl            ← Trained IsolationForest model
+      └── scaler.pkl           ← Fitted StandardScaler
+
+  API Endpoints:
+  --------------
+  GET  /                          Health check → { "status": "Backend running" }
+  POST /predict                   Accepts TransactionInput, returns prediction
+  GET  /transactions              Returns all transactions (newest first)
+  PATCH /transactions/{id}/block  Sets transaction status to BLOCKED
+
+  Startup Behaviour (lifespan):
+  -----------------------------
+  On server start, FastAPI's lifespan context manager:
+  1. Runs Base.metadata.create_all() to create tables if missing.
+  2. Executes ALTER TABLE transactions ADD COLUMN status (safe migration).
+  The ML model and scaler are loaded at module import time (ml/predict.py).
+
+  CORS:
+  -----
+  CORSMiddleware is configured to allow all origins ("*"), enabling the
+  Next.js frontend on port 3000 to communicate freely with the API on port 8000.
+
+  Dependency Injection:
+  ---------------------
+  get_db() is a FastAPI dependency that yields a SQLAlchemy session and
+  ensures it is closed after each request, preventing connection leaks.
+
+================================================================================
+  7. FRONTEND ARCHITECTURE
+================================================================================
+
+  Framework: Next.js 16 (App Router, TypeScript)
+  Styling:   Tailwind CSS + Custom CSS (globals.css) with mixed token-based
+             and utility-based color styling across components/pages.
+  Charts:    Recharts
+  HTTP:      Axios
+
+  Project Structure:
+  ------------------
+  frontend/
+  ├── app/
+  │   ├── layout.tsx           ← Root layout: Inter font, Navbar, global styles
+  │   ├── globals.css          ← Design tokens, animations, skeleton, utilities
+  │   ├── page.tsx             ← Home landing page
+  │   ├── dashboard/
+  │   │   └── page.tsx         ← Executive dashboard (KPI + charts + table)
+  │   └── detect/
+  │       └── page.tsx         ← Fraud detection form + history table
+  ├── components/
+  │   ├── Navbar.tsx           ← Sticky frosted navbar, active route indicator
+  │   ├── StatusBadge.tsx      ← FRAUD / NORMAL pill badge (sm / md sizes)
+  │   └── BlockButton.tsx      ← Block action button with loading state
+  ├── services/
+  │   └── api.ts               ← Axios instance, predictFraud(), getTransactions(),
+  │                               blockTransaction()
+  └── types/
+      └── index.ts             ← TypeScript interfaces: TransactionInput,
+                                  PredictResult, Transaction
+
+  Page Responsibilities:
+  ----------------------
+  Home (/)
+    - Ambient glow background, hero section.
+    - Live backend status check (hits GET /transactions on load).
+    - Feature grid and CTA links.
+
+  Dashboard (/dashboard) — "use client"
+    - Polls GET /transactions every 5 seconds via setInterval.
+    - Calculates KPIs from API data.
+    - Renders BarChart and PieChart via Recharts.
+    - Shows skeleton loaders during initial fetch.
+    - Detects new FRAUD rows and triggers flash animation.
+
+  Detect Fraud (/detect) — "use client"
+    - Form with amount and time inputs (Enter key supported).
+    - Calls POST /predict on submit.
+    - Displays result card with risk score and progress bar.
+    - Refreshes history table after each prediction.
+    - Skeleton loader during initial history fetch.
+
+  Real-Time Update Strategy:
+  --------------------------
+  setInterval(() => fetchData(), 5000) in dashboard/page.tsx.
+  The interval is cleared via the useEffect cleanup function on unmount,
+  preventing memory leaks:
+    useEffect(() => {
+      const id = setInterval(...);
+      return () => clearInterval(id);
+    }, []);
+
+================================================================================
+  8. DATABASE DESIGN
+================================================================================
+
+  Database: SQLite (finguard.db)
+  ORM:      SQLAlchemy 2.x (declarative base)
+
+  Table: transactions
+  -------------------
+  Column      Type      Description
+  ─────────── ───────── ─────────────────────────────────────────────────
+  id          INTEGER   Primary key, auto-incremented unique identifier.
+  amount      FLOAT     Transaction value in USD.
+  time        FLOAT     Hour of day when the transaction occurred (0–23).
+  prediction  VARCHAR   ML model output: "FRAUD" or "NORMAL".
+  risk_score  FLOAT     Anomaly risk score (higher = more suspicious).
+  status      VARCHAR   Current state: "ACTIVE" (default) or "BLOCKED".
+  created_at  DATETIME  UTC timestamp of when the record was created.
+
+  Notes:
+  ------
+  - SQLite was chosen for zero-configuration local development.
+  - The status column was added in Phase 8 via a safe ALTER TABLE migration
+    that runs at server startup, preserving existing data.
+  - Records are always retrieved ordered by created_at DESC (newest first).
+
+================================================================================
+  9. PHASE-WISE DEVELOPMENT
+================================================================================
+
+  Phase 1 — FastAPI Backend Foundation
+  ─────────────────────────────────────
+  Goal: Establish the backend skeleton with a running API server.
+  - Set up FastAPI application with CORS middleware.
+  - Created the modular folder structure (app/, ml/, db/, etc.).
+  - Added a GET / health check endpoint.
+  - Generated requirements.txt with core dependencies.
+  - Verified server runs with: uvicorn app.main:app --reload
+
+  Phase 2 — ML Fraud Detection Integration
+  ─────────────────────────────────────────
+  Goal: Integrate a trained ML model into the API.
+  - Created ml/train.py to generate synthetic data and train IsolationForest.
+  - Saved model.pkl and scaler.pkl using joblib.
+  - Created ml/predict.py with predict_fraud(amount, time) function.
+  - Added POST /predict endpoint to FastAPI.
+  - Tested via Swagger UI at http://localhost:8000/docs.
+
+  Phase 3 — Database & Transaction History
+  ─────────────────────────────────────────
+  Goal: Persist all predictions to a database and expose a history API.
+  - Integrated SQLAlchemy with SQLite (finguard.db).
+  - Created Transaction ORM model and Pydantic response schema.
+  - Implemented save_transaction() and get_all_transactions() services.
+  - Updated POST /predict to store results after ML inference.
+  - Added GET /transactions endpoint returning JSON history.
+  - Used lifespan() to auto-create tables on server start.
+
+  Phase 4 — Next.js Frontend Setup
+  ─────────────────────────────────
+  Goal: Scaffold a clean, modern frontend application.
+  - Created Next.js app in frontend/ with App Router and TypeScript.
+  - Installed Axios for API communication.
+  - Created folder structure: app/, components/, services/, types/.
+  - Defined TypeScript interfaces in types/index.ts.
+  - Created Axios service layer in services/api.ts.
+  - Built Navbar and StatusBadge components.
+  - Implemented basic Home page and Detect Fraud page (no API calls yet).
+
+  Phase 5 — Frontend-Backend Integration
+  ───────────────────────────────────────
+  Goal: Connect the UI to live API endpoints.
+  - Wired predictFraud() to the "Analyze Transaction" button.
+  - Wired getTransactions() to load history on page mount.
+  - Added loading states ("Detecting…") and error handling.
+  - History table auto-refreshes after each new prediction.
+  - Fraud rows highlighted with red background.
+
+  Phase 6 — Analytics Dashboard
+  ──────────────────────────────
+  Goal: Build an executive analytics view with charts.
+  - Installed Recharts charting library.
+  - Created /dashboard route with KPI cards (all real data).
+  - Implemented BarChart (Fraud vs Normal) and Donut PieChart.
+  - Added Recent 5 Transactions table.
+  - Updated Navbar with Dashboard link.
+
+  Phase 7 — Live Monitoring
+  ──────────────────────────
+  Goal: Make the dashboard feel like a real-time monitoring system.
+  - Implemented 5-second polling with setInterval + cleanup on unmount.
+  - Added non-blocking "Syncing…" spinner during refresh.
+  - Introduced newFraudIds tracking to detect freshly-arrived FRAUD rows.
+  - Added fraudFlash CSS animation for new fraud row highlighting.
+  - Added kpiPop CSS animation that fires when KPI values change.
+
+  Phase 8 — Block Transaction Action System
+  ──────────────────────────────────────────
+  Goal: Allow analysts to block fraudulent transactions from the UI.
+  - Added status column (VARCHAR, default "ACTIVE") to Transaction model.
+  - Implemented SQLite migration in lifespan (ALTER TABLE ADD COLUMN).
+  - Created block_transaction() service function.
+  - Added PATCH /transactions/{id}/block endpoint.
+  - Updated frontend types, API service, and all tables with:
+      · Status badge (ACTIVE = yellow, BLOCKED = red)
+      · Block button (visible only on unblocked FRAUD rows)
+  - Blocking instantly refreshes the data.
+
+  Phase 9 — Production UI/UX Polish
+  ───────────────────────────────────
+  Goal: Elevate the interface to production-grade fintech quality.
+  - Complete globals.css rewrite with CSS design tokens, animations.
+  - Current UI styling combines those tokens with direct Tailwind utility
+    classes in page/component files for faster iteration.
+  - Added shimmer skeleton loaders for KPI cards and tables.
+  - Added fadeInUp page entrance animation.
+  - Integrated Inter font via next/font/google.
+  - Rebuilt Navbar: sticky, frosted backdrop-blur, active route dot.
+  - Redesigned Home page with ambient glow background and feature grid.
+  - Fraud rows now have a red left-border accent (fraud-row class).
+  - Added sticky table headers (table-head-sticky class).
+  - KPI cards have per-accent hover glow effects.
+  - Live monitoring badge has continuous glow-pulse animation.
+  - Empty states with icons across all pages.
+  - All inputs support Enter-key submission on Detect page.
+
+================================================================================
+  10. TECHNOLOGY STACK
+================================================================================
+
+  Backend:
+  ─────────────────────────────────────────────────────────────────────────────
+  Python 3.11+          Core backend language.
+  FastAPI               High-performance async API framework.
+  Uvicorn               ASGI server for running FastAPI.
+  Pydantic              Request/response data validation and serialisation.
+  SQLAlchemy            ORM for database modelling and queries.
+  SQLite                Lightweight embedded relational database.
+  scikit-learn          IsolationForest ML algorithm.
+  pandas & numpy        Data manipulation for synthetic dataset generation.
+  joblib                Serialisation of ML model and scaler artifacts.
+
+  Frontend:
+  ─────────────────────────────────────────────────────────────────────────────
+  Next.js 16            React framework with App Router for routing and SSR.
+  TypeScript            Static typing for all frontend code.
+  Tailwind CSS          Utility-first CSS framework for rapid styling.
+  Recharts              Composable charting library built on D3.
+  Axios                 HTTP client for API communication.
+  next/font             Google Fonts (Inter) integration with zero layout shift.
+
+================================================================================
+  11. HOW TO RUN THE PROJECT
+================================================================================
+
+  Prerequisites:
+  - Python 3.11+ installed
+  - Node.js 18+ and npm installed
+  - Git (optional)
+
+  Step 1 — Train the ML Model (one-time setup):
+  ─────────────────────────────────────────────
+  cd backend
+  python -m venv venv
+
+  # Activate virtual environment:
+  # Windows:  venv\Scripts\activate
+  # macOS/Linux: source venv/bin/activate
+
+  pip install -r requirements.txt
+  python ml/train.py
+  # This creates ml/model.pkl and ml/scaler.pkl
+
+  Step 2 — Start the Backend:
+  ────────────────────────────
+  cd backend              (if not already there)
+  uvicorn app.main:app --reload --port 8000
+
+  Backend is now live at: http://localhost:8000
+  API documentation:      http://localhost:8000/docs
+
+  Step 3 — Start the Frontend:
+  ─────────────────────────────
+  cd frontend
+  npm install             (first time only)
+  npm run dev
+
+  Frontend is now live at: http://localhost:3000
+
+  Pages:
+  ──────
+  http://localhost:3000/           → Home landing page
+  http://localhost:3000/dashboard  → Executive analytics dashboard
+  http://localhost:3000/detect     → Fraud detection form
+
+  Test It:
+  ────────
+  1. Open http://localhost:3000/detect
+  2. Enter amount: 9000, time: 2
+  3. Click "Analyze Transaction"
+  4. See FRAUD result + risk score
+  5. Open http://localhost:3000/dashboard
+  6. Observe KPI cards, charts, and the new FRAUD row
+  7. Click "Block" on the FRAUD row to block it
+
+================================================================================
+  12. FUTURE SCOPE
+================================================================================
+
+  1. User Authentication
+     Role-based access control (analyst, admin, read-only) using JWT.
+
+  2. Multi-Feature ML Model
+     Incorporate additional features: merchant category, geolocation,
+     device fingerprint, transaction velocity, and historical patterns.
+
+  3. Real Dataset Training
+     Replace synthetic data with production-quality labelled fraud datasets
+     (e.g. Kaggle Credit Card Fraud Detection) for higher real-world accuracy.
+
+  4. Model Retraining Pipeline
+     Schedule periodic retraining as new transaction data accumulates,
+     preventing model drift over time.
+
+  5. Alert & Notification System
+     Real-time email/SMS/webhook alerts to analysts when high-risk
+     transactions are detected.
+
+  6. Audit Log
+     Immutable log of all block actions with analyst ID and timestamp
+     for compliance and regulatory reporting.
+
+  7. Export & Reporting
+     PDF/CSV export of transaction history and analytics for stakeholders.
+
+  8. Microservices Architecture
+     Decompose into independent ML inference service, transaction service,
+     and notification service for horizontal scalability.
+
+  9. Cloud Deployment
+     Containerise with Docker and deploy to AWS/GCP/Azure with CI/CD pipeline.
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
