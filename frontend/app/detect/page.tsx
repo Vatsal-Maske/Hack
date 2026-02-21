@@ -2,9 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import StatusBadge from "@/components/StatusBadge";
-import BlockButton from "@/components/BlockButton";
-import { predictFraud, getTransactions } from "@/services/api";
-import type { PredictResult, Transaction } from "@/types";
+import TransactionDetailsModal from "@/components/TransactionDetailsModal";
+import { getTransactions, startSimulator, stopSimulator } from "@/services/api";
+import type { Transaction } from "@/types";
+import { formatCurrency } from "@/utils/currency";
+import { formatRiskPercentage, riskTextColorClass } from "@/utils/risk";
+import ProtectedRoute from "@/components/ProtectedRoute";
+
+const POLL_INTERVAL = 5000;
 
 // ── Skeleton table rows ───────────────────────────────────────────────────────
 function SkeletonTableRows() {
@@ -37,17 +42,30 @@ function StatusPill({ status }: { status: string }) {
 }
 
 // ── Main detect page ──────────────────────────────────────────────────────────
-export default function DetectPage() {
-    const [amount, setAmount] = useState("");
-    const [time, setTime] = useState("");
-
-    const [result, setResult] = useState<PredictResult | null>(null);
-    const [detecting, setDetecting] = useState(false);
-    const [detectError, setDetectError] = useState<string | null>(null);
+function DetectContent() {
+    const [simulatorRunning, setSimulatorRunning] = useState(false);
+    const [simulatorBusy, setSimulatorBusy] = useState(false);
+    const [simulatorMsg, setSimulatorMsg] = useState<string | null>(null);
 
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [historyLoading, setHistoryLoading] = useState(true);
     const [historyError, setHistoryError] = useState<string | null>(null);
+    const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+
+    const handleViewDetails = (transaction: Transaction) => {
+        setSelectedTransaction(transaction);
+        setIsModalOpen(true);
+    };
+
+    const handleCloseModal = () => {
+        setIsModalOpen(false);
+        setSelectedTransaction(null);
+    };
+
+    const handleBlock = () => {
+        loadHistory();
+    };
 
     const loadHistory = useCallback(async () => {
         try {
@@ -61,31 +79,37 @@ export default function DetectPage() {
         }
     }, []);
 
-    useEffect(() => { loadHistory(); }, [loadHistory]);
+    useEffect(() => {
+        loadHistory();
+        const id = setInterval(loadHistory, POLL_INTERVAL);
+        return () => clearInterval(id);
+    }, [loadHistory]);
 
-    const handleDetect = async () => {
-        const amt = parseFloat(amount);
-        const hr = parseFloat(time);
-
-        if (isNaN(amt) || amt <= 0) {
-            setDetectError("Enter a valid amount greater than 0."); return;
-        }
-        if (isNaN(hr) || hr < 0 || hr > 23) {
-            setDetectError("Enter a valid hour between 0 and 23."); return;
-        }
-
-        setDetecting(true);
-        setDetectError(null);
-        setResult(null);
-
+    const handleStartSimulator = async () => {
+        setSimulatorBusy(true);
+        setSimulatorMsg(null);
         try {
-            const res = await predictFraud({ amount: amt, time: hr });
-            setResult(res);
-            await loadHistory();
+            const res = await startSimulator();
+            setSimulatorRunning(res.running);
+            setSimulatorMsg(res.message);
         } catch {
-            setDetectError("Backend not reachable. Make sure the server is running on port 8000.");
+            setSimulatorMsg("Failed to start simulator.");
         } finally {
-            setDetecting(false);
+            setSimulatorBusy(false);
+        }
+    };
+
+    const handleStopSimulator = async () => {
+        setSimulatorBusy(true);
+        setSimulatorMsg(null);
+        try {
+            const res = await stopSimulator();
+            setSimulatorRunning(res.running);
+            setSimulatorMsg(res.message);
+        } catch {
+            setSimulatorMsg("Failed to stop simulator.");
+        } finally {
+            setSimulatorBusy(false);
         }
     };
 
@@ -94,151 +118,43 @@ export default function DetectPage() {
         const h = Math.floor(t);
         return `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`;
     };
-    const fmtAmt = (n: number) =>
-        "$" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
     return (
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 space-y-7 fade-in">
 
             {/* ── Page header ─────────────────────────────────────────────────────── */}
-            <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-white mb-1">Fraud Detection</h1>
-                <p className="text-slate-400 text-sm">Submit a transaction to run real-time ML analysis.</p>
-            </div>
-
-            {/* ── Input + Result ──────────────────────────────────────────────────── */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-                {/* Input card */}
-                <div className="card p-7">
-                    <h2 className="text-white font-semibold text-lg mb-6">Transaction Details</h2>
-                    <div className="space-y-5">
-
-                        {/* Amount */}
-                        <div>
-                            <label className="block text-slate-400 text-sm font-medium mb-2">
-                                Transaction Amount (USD)
-                            </label>
-                            <div className="relative glow-blue rounded-xl">
-                                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-medium select-none">$</span>
-                                <input
-                                    type="number" min={0.01} step={0.01} value={amount}
-                                    onChange={(e) => setAmount(e.target.value)}
-                                    onKeyDown={(e) => e.key === "Enter" && handleDetect()}
-                                    placeholder="e.g. 9000"
-                                    className="w-full bg-slate-800/70 border border-slate-700 text-white rounded-xl
-                    pl-8 pr-4 py-3 placeholder:text-slate-600 focus:outline-none
-                    focus:border-blue-500/70 transition-colors"
-                                />
-                            </div>
-                        </div>
-
-                        {/* Time */}
-                        <div>
-                            <label className="block text-slate-400 text-sm font-medium mb-2">
-                                Hour of Day (0 – 23)
-                            </label>
-                            <div className="glow-blue rounded-xl">
-                                <input
-                                    type="number" min={0} max={23} step={1} value={time}
-                                    onChange={(e) => setTime(e.target.value)}
-                                    onKeyDown={(e) => e.key === "Enter" && handleDetect()}
-                                    placeholder="e.g. 2   (2 AM = high risk)"
-                                    className="w-full bg-slate-800/70 border border-slate-700 text-white rounded-xl
-                    px-4 py-3 placeholder:text-slate-600 focus:outline-none
-                    focus:border-blue-500/70 transition-colors"
-                                />
-                            </div>
-                            <p className="text-slate-600 text-xs mt-1.5">
-                                ⚠️ Late-night hours (0–5) significantly increase fraud probability.
-                            </p>
-                        </div>
-
-                        {/* Error */}
-                        {detectError && (
-                            <div className="bg-red-500/10 border border-red-500/25 rounded-xl px-4 py-3 text-red-400 text-sm flex gap-2">
-                                <span>⚠️</span> {detectError}
-                            </div>
-                        )}
-
-                        {/* Button */}
-                        <button
-                            onClick={handleDetect}
-                            disabled={detecting}
-                            className="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700
-                disabled:opacity-50 disabled:cursor-not-allowed
-                text-white font-semibold rounded-xl py-3.5 transition-all
-                hover:shadow-lg hover:shadow-blue-500/25
-                flex items-center justify-center gap-2"
-                        >
-                            {detecting ? (
-                                <>
-                                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                    Detecting…
-                                </>
-                            ) : (
-                                <>🔍 Analyze Transaction</>
-                            )}
-                        </button>
-                    </div>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                    <h1 className="text-2xl sm:text-3xl font-bold text-white mb-1">Transactions</h1>
+                    <p className="text-slate-400 text-sm">Transactions Monitoring Console</p>
                 </div>
 
-                {/* Result card */}
-                <div className={`card p-7 flex flex-col justify-center transition-all duration-300
-          ${result
-                        ? result.prediction === "FRAUD"
-                            ? "border-red-500/30 bg-red-500/[0.03]"
-                            : "border-emerald-500/30 bg-emerald-500/[0.03]"
-                        : "border-dashed"
-                    }`}
-                >
-                    {result ? (
-                        <div className="space-y-6 fade-in">
-                            <div>
-                                <p className="text-slate-500 text-xs font-medium uppercase tracking-widest mb-3">
-                                    Analysis Result
-                                </p>
-                                <StatusBadge prediction={result.prediction} />
-                            </div>
+                <div className="card p-4 min-w-[280px]">
+                    <h2 className="text-white font-semibold mb-3">Transaction Simulator</h2>
+                    <div className="flex items-center gap-2 mb-4">
+                        <span className={`w-2.5 h-2.5 rounded-full ${simulatorRunning ? "bg-emerald-400" : "bg-red-400"}`} />
+                        <span className={`text-sm font-medium ${simulatorRunning ? "text-emerald-400" : "text-red-400"}`}>
+                            {simulatorRunning ? "Running" : "Stopped"}
+                        </span>
+                    </div>
 
-                            <div>
-                                <p className="text-slate-500 text-xs font-medium uppercase tracking-widest mb-2">
-                                    Anomaly Risk Score
-                                </p>
-                                <div className="flex items-end gap-2 mb-3">
-                                    <span className={`text-4xl font-bold tabular-nums ${result.prediction === "FRAUD" ? "text-red-400" : "text-emerald-400"
-                                        }`}>
-                                        {result.risk_score.toFixed(4)}
-                                    </span>
-                                </div>
-                                {/* Risk bar */}
-                                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                    <div
-                                        className={`h-full rounded-full transition-all duration-700 ${result.prediction === "FRAUD" ? "bg-red-500" : "bg-emerald-500"
-                                            }`}
-                                        style={{ width: `${Math.min(result.risk_score * 100, 100)}%` }}
-                                    />
-                                </div>
-                            </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleStartSimulator}
+                            disabled={simulatorBusy || simulatorRunning}
+                            className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold"
+                        >
+                            Start Simulator
+                        </button>
+                        <button
+                            onClick={handleStopSimulator}
+                            disabled={simulatorBusy || !simulatorRunning}
+                            className="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold"
+                        >
+                            Stop Simulator
+                        </button>
+                    </div>
 
-                            <p className={`text-sm font-medium ${result.prediction === "FRAUD" ? "text-red-400" : "text-emerald-400"
-                                }`}>
-                                {result.prediction === "FRAUD"
-                                    ? "🚨 This transaction has been flagged as suspicious."
-                                    : "✅ This transaction appears legitimate."}
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="text-center">
-                            <div className="w-14 h-14 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl">
-                                📊
-                            </div>
-                            <p className="text-slate-400 font-medium">No analysis yet</p>
-                            <p className="text-slate-600 text-sm mt-1">
-                                Fill in the form and click Analyze.
-                            </p>
-                        </div>
-                    )}
+                    {simulatorMsg && <p className="text-slate-400 text-xs mt-3">{simulatorMsg}</p>}
                 </div>
             </div>
 
@@ -267,7 +183,7 @@ export default function DetectPage() {
                             📭
                         </div>
                         <p className="text-slate-300 font-semibold">No transactions monitored yet</p>
-                        <p className="text-slate-600 text-sm">Run your first detection using the form above.</p>
+                        <p className="text-slate-600 text-sm">Start simulator to stream live transactions.</p>
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
@@ -293,16 +209,24 @@ export default function DetectPage() {
                                                 : "hover:bg-slate-800/30"
                                             }`}
                                     >
-                                        <td className="px-6 py-4 text-white font-semibold">{fmtAmt(tx.amount)}</td>
+                                        <td className="px-6 py-4 text-white font-semibold">{formatCurrency(tx.amount)}</td>
                                         <td className="px-6 py-4 text-slate-400 text-sm">{fmtTime(tx.time)}</td>
                                         <td className="px-6 py-4"><StatusBadge prediction={tx.prediction} size="sm" /></td>
-                                        <td className="px-6 py-4 text-slate-400 font-mono text-xs">{tx.risk_score.toFixed(4)}</td>
+                                        <td
+                                            className={`px-6 py-4 font-mono text-xs ${riskTextColorClass(tx.risk_score)}`}
+                                            title="Anomaly probability based on ML model"
+                                        >
+                                            {formatRiskPercentage(tx.risk_score)}
+                                        </td>
                                         <td className="px-6 py-4"><StatusPill status={tx.status} /></td>
                                         <td className="px-6 py-4 text-slate-500 text-xs">{fmtTs(tx.created_at)}</td>
                                         <td className="px-6 py-4">
-                                            {tx.prediction === "FRAUD" && tx.status !== "BLOCKED" && (
-                                                <BlockButton transactionId={tx.id} onBlocked={loadHistory} />
-                                            )}
+                                            <button
+                                                onClick={() => handleViewDetails(tx)}
+                                                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                                            >
+                                                View Details
+                                            </button>
                                         </td>
                                     </tr>
                                 ))}
@@ -311,6 +235,24 @@ export default function DetectPage() {
                     </div>
                 )}
             </div>
+
+            {/* Transaction Details Modal */}
+            {selectedTransaction && (
+                <TransactionDetailsModal
+                    transaction={selectedTransaction}
+                    isOpen={isModalOpen}
+                    onClose={handleCloseModal}
+                    onBlock={handleBlock}
+                />
+            )}
         </div>
+    );
+}
+
+export default function DetectPage() {
+    return (
+        <ProtectedRoute>
+            <DetectContent />
+        </ProtectedRoute>
     );
 }

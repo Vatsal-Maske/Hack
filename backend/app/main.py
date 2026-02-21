@@ -11,6 +11,7 @@ from app.db.session import engine, get_db, Base
 from app.models.transaction import Transaction           # noqa: F401 — registers model
 from app.schemas.transaction import TransactionResponse
 from app.services.transaction import save_transaction, get_all_transactions, block_transaction
+from app.services.simulator import simulator
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────
@@ -28,7 +29,10 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass  # Column already exists — safe to ignore
 
-    yield
+    try:
+        yield
+    finally:
+        simulator.stop()
 
 
 # ── App ────────────────────────────────────────────────────────────────────────
@@ -93,3 +97,21 @@ async def block_transaction_endpoint(transaction_id: int, db: Session = Depends(
     if record is None:
         raise HTTPException(status_code=404, detail=f"Transaction {transaction_id} not found")
     return record
+
+
+@app.post("/simulator/start", tags=["Simulator"])
+async def start_simulator():
+    started = simulator.start()
+    return {
+        "running": simulator.is_running(),
+        "message": "Simulator started" if started else "Simulator already running",
+    }
+
+
+@app.post("/simulator/stop", tags=["Simulator"])
+async def stop_simulator():
+    stopped = simulator.stop()
+    return {
+        "running": simulator.is_running(),
+        "message": "Simulator stopped" if stopped else "Simulator already stopped",
+    }

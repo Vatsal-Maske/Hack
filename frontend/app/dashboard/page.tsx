@@ -6,9 +6,12 @@ import {
     ResponsiveContainer, Cell, PieChart, Pie, Legend,
 } from "recharts";
 import StatusBadge from "@/components/StatusBadge";
-import BlockButton from "@/components/BlockButton";
+import TransactionDetailsModal from "@/components/TransactionDetailsModal";
 import { getTransactions } from "@/services/api";
 import type { Transaction } from "@/types";
+import { formatCurrency } from "@/utils/currency";
+import { formatRiskPercentage, riskTextColorClass } from "@/utils/risk";
+import ProtectedRoute from "@/components/ProtectedRoute";
 
 const POLL_INTERVAL = 5000;
 
@@ -103,13 +106,29 @@ function StatusPill({ status }: { status: string }) {
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 
-export default function DashboardPage() {
+function DashboardContent() {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [newFraudIds, setNewFraudIds] = useState<Set<number>>(new Set());
+    const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+    const [isModalOpen, setIsModalOpen] = useState(false);
     const knownIds = useRef<Set<number>>(new Set());
+
+    const handleViewDetails = (transaction: Transaction) => {
+        setSelectedTransaction(transaction);
+        setIsModalOpen(true);
+    };
+
+    const handleCloseModal = () => {
+        setIsModalOpen(false);
+        setSelectedTransaction(null);
+    };
+
+    const handleBlock = () => {
+        fetchData(true);
+    };
 
     const fetchData = useCallback(async (isPolling = false) => {
         if (isPolling) setUpdating(true);
@@ -150,7 +169,7 @@ export default function DashboardPage() {
     const fraudCount = transactions.filter((t) => t.prediction === "FRAUD").length;
     const normalCount = total - fraudCount;
     const fraudPct = total > 0 ? ((fraudCount / total) * 100).toFixed(1) : "0.0";
-    const latestRisk = total > 0 ? transactions[0].risk_score.toFixed(4) : "—";
+    const latestRisk = total > 0 ? formatRiskPercentage(transactions[0].risk_score) : "—";
 
     const barData = [
         { label: "Normal", count: normalCount, fill: "#10b981" },
@@ -165,9 +184,6 @@ export default function DashboardPage() {
         const h = Math.floor(t);
         return `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`;
     };
-    const fmtAmt = (n: number) =>
-        "$" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
     if (error) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[70vh] gap-4 fade-in">
@@ -318,16 +334,24 @@ export default function DashboardPage() {
                         ${isFraud ? "fraud-row" : "border-l-3 border-transparent"}`}
                                         >
                                             <td className="px-6 py-4 text-slate-600 font-mono text-xs">{i + 1}</td>
-                                            <td className="px-6 py-4 text-white font-semibold">{fmtAmt(tx.amount)}</td>
+                                            <td className="px-6 py-4 text-white font-semibold">{formatCurrency(tx.amount)}</td>
                                             <td className="px-6 py-4 text-slate-300">{fmtTime(tx.time)}</td>
                                             <td className="px-6 py-4"><StatusBadge prediction={tx.prediction} size="sm" /></td>
-                                            <td className="px-6 py-4 text-slate-300 font-mono text-xs">{tx.risk_score.toFixed(4)}</td>
+                                            <td
+                                                className={`px-6 py-4 font-mono text-xs ${riskTextColorClass(tx.risk_score)}`}
+                                                title="Anomaly probability based on ML model"
+                                            >
+                                                {formatRiskPercentage(tx.risk_score)}
+                                            </td>
                                             <td className="px-6 py-4"><StatusPill status={tx.status} /></td>
                                             <td className="px-6 py-4 text-slate-500 text-xs">{fmtTs(tx.created_at)}</td>
                                             <td className="px-6 py-4">
-                                                {tx.prediction === "FRAUD" && tx.status !== "BLOCKED" && (
-                                                    <BlockButton transactionId={tx.id} onBlocked={() => fetchData(true)} />
-                                                )}
+                                                <button
+                                                    onClick={() => handleViewDetails(tx)}
+                                                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                                                >
+                                                    View Details
+                                                </button>
                                             </td>
                                         </tr>
                                     );
@@ -337,6 +361,16 @@ export default function DashboardPage() {
                     </div>
                 )}
             </div>
+
+            {/* Transaction Details Modal */}
+            {selectedTransaction && (
+                <TransactionDetailsModal
+                    transaction={selectedTransaction}
+                    isOpen={isModalOpen}
+                    onClose={handleCloseModal}
+                    onBlock={handleBlock}
+                />
+            )}
         </div>
     );
 }
@@ -363,5 +397,13 @@ function EmptyChart() {
         <div className="flex items-center justify-center h-[220px] text-slate-600 text-sm gap-2">
             <span>📉</span> No data to display
         </div>
+    );
+}
+
+export default function DashboardPage() {
+    return (
+        <ProtectedRoute>
+            <DashboardContent />
+        </ProtectedRoute>
     );
 }

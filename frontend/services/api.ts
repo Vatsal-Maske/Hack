@@ -26,4 +26,16 @@ export async function blockTransaction(id: number): Promise<Transaction> {
     return response.data;
 }
 
+/** Start backend transaction simulator loop. */
+export async function startSimulator(): Promise<{ running: boolean; message: string }> {
+    const response = await api.post<{ running: boolean; message: string }>("/simulator/start");
+    return response.data;
+}
+
+/** Stop backend transaction simulator loop. */
+export async function stopSimulator(): Promise<{ running: boolean; message: string }> {
+    const response = await api.post<{ running: boolean; message: string }>("/simulator/stop");
+    return response.data;
+}
+
 export default api;

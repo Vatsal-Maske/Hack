@@ -3,6 +3,7 @@
 export interface TransactionInput {
     amount: number;
     time: number;
+    userUpiId?: string;
 }
 
 export interface PredictResult {
